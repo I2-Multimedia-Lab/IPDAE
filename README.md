@@ -1,2 +1,1 @@
-# IPDAE
-(ACM MM 2022 Workshop APCCPA) IPDAE: Improved Patch-Based Deep Autoencoder for Lossy Point Cloud Geometry Compression.
+A preliminary version of IPDAE. The formal version and pretrained models will be updated here within a few days.
