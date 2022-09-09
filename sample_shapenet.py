@@ -130,7 +130,7 @@ class PartNormalDataset(Dataset):
 def parse_args():
     parser = argparse.ArgumentParser('Sampler')
     parser.add_argument('source', help='Source directory', default='./data/shapenetcore_partanno_segmentation_benchmark_v0_normal')
-    parser.add_argument('dest', help='Destination directory', default='./data/ShapeNet_pc_2048')
+    parser.add_argument('dest', help='Destination directory', default='./data/ShapeNet_pc_01_2048p')
     parser.add_argument('--n_point', type=int,  default=2048, help='Point Number [default: 2048]')
 
     return parser.parse_args()

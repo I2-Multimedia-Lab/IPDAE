@@ -1,76 +1,66 @@
 import os
 import time
-import subprocess
-from glob import glob
+import argparse
 
 import numpy as np
 import torch
-from tqdm import tqdm
-from pytorch3d.ops.knn import _KNN, knn_gather, knn_points
 import torchac
+from pytorch3d.ops.knn import _KNN, knn_gather, knn_points
 
-import pc_io
-from plyfile import PlyData
+from tqdm import tqdm
+from glob import glob
+
 import pn_kit
-import global_cd_net_mlpd as net
+import AE
 
-torch.manual_seed(1)
-np.random.seed(1)
+torch.cuda.manual_seed(11)
+torch.manual_seed(11)
+np.random.seed(11)
 
-ALPHA = 2
-K = 1024
-d = 16   # Bottleneck Size
-L = 7   # Quantization Level
-MIN_SAMPLED_BPP = 0.07
+parser = argparse.ArgumentParser(
+    prog='compress.py',
+    description='Compress Point Clouds Using Trained Model.',
+    formatter_class=argparse.ArgumentDefaultsHelpFormatter
+)
 
-N0 = 1024
+parser.add_argument('input_glob', help='Point clouds glob pattern for compression.', default='/mnt/hdd/datasets_yk/ModelNet40_pc_01_8192p/**/test/*.ply')
+parser.add_argument('compressed_path', help='Comressed .bin files folder.', default='./data/ModelNet40_K256_compressed/')
+parser.add_argument('model_load_folder', help='Directory where to load trained models.', default='./model/K256/')
 
-'''
-INPUT_PATH = '/home/yk/Projects/DataSets/ShapeNet_pc_01_2048p/test/*.ply'
-COMPRESSED_PATH = f'./data/ShapeNet_Compressed_N_ALPHA{ALPHA}_K{K}_d{d}_L{L}_Lambda{1e-6}/'
-'''
+parser.add_argument('--N0', type=int, help='Scale Transformation constant.', default=1024)
+parser.add_argument('--ALPHA', type=int, help='The factor of patch coverage ratio.', default=2)
+parser.add_argument('--K', type=int, help='Number of points in each patch.', default=256)
+parser.add_argument('--d', type=int, help='Bottleneck size.', default=16)
+parser.add_argument('--L', type=int, help='Quantization Level.', default=7)
+parser.add_argument('--octree_bpp', type=int, help='Centroids bpp limit.', default=0.25)
 
-INPUT_PATH = '/mnt/hdd/datasets_yk/ModelNet40_pc_01_8192p/**/test/*.ply'
-COMPRESSED_PATH = f'./data/ModelNet_Compressed_N_ALPHA{ALPHA}_K{K}_d{d}_L{L}_Lambda{1e-6}/'
+args = parser.parse_args()
 
-'''
-INPUT_PATH = '/mnt/hdd/datasets_yk/ModelNet40_pc_01_8192p/chair/chair_0930.ply'
-COMPRESSED_PATH = f'./data/ModelNet_Compressed_Teaser/'
-'''
-'''
-INPUT_PATH = '/home/yk/Projects/DataSets/Stanford3d_pc/Area_1/*.ply'
-COMPRESSED_PATH = f'./data/Stanford3d_Area_1_Compressed_N_ALPHA{ALPHA}_K{K}_d{d}_L{L}_Lambda{1e-6}/'
-'''
+N0 = args.N0
+K = args.K
+k = K // args.ALPHA
 
-'''
-INPUT_PATH = '/home/yk/Projects/DataSets/KITTI_pc/sequences/00/*.ply'
-COMPRESSED_PATH = f'./data/KITTI_seq_00_Compressed_N_ALPHA{ALPHA}_K{K}_d{d}_L{L}_Lambda{1e-6}/'
-'''
+B = 1 # Compress 1 Point Cloud Each Time !unchangable in this implementation
 
-INPUT_PATH = '/mnt/hdd/datasets_yk/msft/andrew9/ply/frame0000.ply'
-COMPRESSED_PATH = f'./data/andrew9_Compressed_N_ALPHA{ALPHA}_K{K}_d{d}_L{L}_Lambda{1e-6}/'
-
-NET_PATH, PROB_PATH = f'./model/ModelNet_N{8192}_ALPHA{2}_K{K}_d{d}_L{L}_Lambda{1e-6}_MIN_SAMPLED_BPP{MIN_SAMPLED_BPP}_N0_normalized_CD/ae_s78500.pkl', f'./model/ModelNet_N{8192}_ALPHA{2}_K{K}_d{d}_L{L}_Lambda{1e-6}_MIN_SAMPLED_BPP{MIN_SAMPLED_BPP}_N0_normalized_CD/prob_s78500.pkl'
-
-B = 1 # Compress 1 Point Cloud Each Time !unchangable
-
-# CREATE COMPRESSED PATH
-if not os.path.exists(COMPRESSED_PATH):
-    os.makedirs(COMPRESSED_PATH)
+# CREATE COMPRESSED FOLDER
+if not os.path.exists(args.compressed_path):
+    os.makedirs(args.compressed_path)
 
 # READ INPUT FILES
-files = np.array(glob(INPUT_PATH, recursive=True))
-
-#points = pc_io.load_points(files, p_min, p_max)
-files_cat = np.array([os.path.split(os.path.split(x)[0])[1] for x in files])
-#points_train = points[files_cat == 'train']
-#points_test = points[files_cat == 'test']
-#files = files[files_cat == 'test']
-
+files = np.array(glob(args.input_glob, recursive=True))
 filenames = np.array([os.path.split(x)[1] for x in files])
 
-ae = torch.load(NET_PATH).cuda().eval()
-prob = torch.load(PROB_PATH).cuda().eval()
+NET_PATH = os.path.join(args.model_load_folder, 'ae.pkl')
+PROB_PATH = os.path.join(args.model_load_folder, 'prob.pkl')
+
+ae = AE.AE(K=K, k=k, d=args.d, L=args.L).cuda()
+ae.load_state_dict(torch.load(NET_PATH))
+ae.eval()
+
+prob = AE.ConditionalProbabilityModel(args.L, args.d).cuda()
+prob.load_state_dict(torch.load(PROB_PATH))
+prob.eval()
+
 
 def KNN_Patching(batch_x, sampled_xyz, K):
     dist, group_idx, grouped_xyz = knn_points(sampled_xyz, batch_x, K=K, return_nn=True)
@@ -78,62 +68,29 @@ def KNN_Patching(batch_x, sampled_xyz, K):
     x_patches = grouped_xyz.view(B*S, K, 3)
     return x_patches
 
-def binary_array_to_byte_array(a):
-    byte_stream = bytearray()
-    for i in range(0, len(a), 8):
-        byte_stream.append(int(''.join([str(e) for e in a[i:i+8]]), 2))
-    return byte_stream
-
-def byte_array_to_binary_array(byte_stream):
-    int_values = [x for x in byte_stream]
-    binary_array = []
-    for i in range(0, len(int_values)):
-        binary_array.append(list(f'{int_values[i]:08b}'))
-    binary_array = np.array(binary_array, dtype=np.int).flatten()
-    return binary_array
-
-def normalize(pc, margin=0.01):
-    # pc: (1, N, 3), one point cloud
-    # margin: rescaling pc to [0+margin, 1-margin]
-    x, y, z = pc[0, :, 0], pc[0, :, 1], pc[0, :, 2]
-    center = torch.Tensor([(x.max()+x.min())/2, (y.max()+y.min())/2, (z.max()+z.min())/2]).cuda()
-    longest = torch.max(torch.Tensor([x.max() - x.min(), y.max() - y.min(), z.max() - z.min()])).cuda()
-
-    pc = pc - center
-    pc = pc * (1-margin) / longest
-    pc = pc + 0.5
-    
-    return pc, center, longest
-
-
-start_time = time.time()
+time_saver = []
 # DO THE COMPRESS
 with torch.no_grad():
     for i in tqdm(range(filenames.shape[0])):
         # GET 1 POINT CLOUD
-        #pc = pc_io.load_points([files[i]], p_min, p_max, processbar=False)
-        plydata = PlyData.read(files[i])
-        try:
-            pc = np.array(np.transpose(np.stack((plydata['vertex']['x'],plydata['vertex']['y'],plydata['vertex']['z'])))).astype(np.float32)        
-        except:
-            pc = np.array(np.transpose(np.stack((plydata['vertex']['X'],plydata['vertex']['Y'],plydata['vertex']['Z'])))).astype(np.float32)        
+        pc = pn_kit.read_point_cloud(files[i])
         pc = torch.Tensor(pc).cuda()
         pc = pc.unsqueeze(0)
-        #print(pc.shape)
         
+        start_time = time.time()
+
         # normalize our point cloud.
         # remove the pc to (0.5, 0.5)
         # scale the size to (0+margin, 1-margin)
-        pc, center, longest = normalize(pc, margin=0.01)
+        pc, center, longest = pn_kit.normalize(pc, margin=0.01)
 
         N = pc.shape[1]
-        S = (int)(N * ALPHA // K)
-        k = (int)(K // ALPHA)
+        S = (int)(N * args.ALPHA // K)
 
         # SAMPLING
         sampled_xyz = pn_kit.index_points(pc, pn_kit.farthest_point_sample_batch(pc, S))
         # OCTREE ENCODE
-        octree_codes, sampled_bits = pn_kit.encode_sampled_np(sampled_xyz.detach().cpu().numpy(), scale=1, N=N, min_bpp=MIN_SAMPLED_BPP)
+        octree_codes, sampled_bits = pn_kit.encode_sampled_np(sampled_xyz.detach().cpu().numpy(), scale=1, N=N, min_bpp=pn_kit.OCTREE_BPP_DICT[K])
         # OCTREE DECODE
         rec_sampled_xyz = pn_kit.decode_sampled_np(octree_codes, scale=1)
         rec_sampled_xyz = torch.Tensor(rec_sampled_xyz).cuda()
@@ -169,42 +126,28 @@ with torch.no_grad():
         pmf = prob(rec_sampled_xyz)
 
         # ARITHMETHIC ENCODE Y HAT
-        cdf = pn_kit.pmf_to_cdf(pmf)
-        cdf = cdf.cpu()
-        #print(pmf[0,0,0])
-        #print(cdf.shape)
-        #print(cdf[0,0,0])
-        n_latent_quantized = latent_quantized.view(B, S, -1).to(torch.int16).cpu() + L // 2
+        cdf = pn_kit.pmf_to_cdf(pmf).cpu()
+        n_latent_quantized = latent_quantized.view(B, S, -1).to(torch.int16).cpu() + args.L // 2
         byte_stream = torchac.encode_float_cdf(cdf, n_latent_quantized, check_input_bounds=True)
 
         # * WRITE AE TO FILE
-        with open(COMPRESSED_PATH + filenames[i] + '.p.bin', 'wb') as fout:
+        with open(args.compressed_path + filenames[i] + '.p.bin', 'wb') as fout:
             fout.write(byte_stream)
-        # READ AND CHECK
-        '''
-        with open(COMPRESSED_PATH + filenames[i] + '.p.bin', 'rb') as fin:
-            byte_stream = fin.read()
-        assert (torchac.decode_float_cdf(cdf, byte_stream) - L // 2).float().view(B*S, -1).cuda().equal(latent_quantized)
-        '''
 
         # * SAVE OCTREE CODE TO FILE
         octree_code = octree_codes[0]
-        byte_stream = binary_array_to_byte_array(octree_code)
-        with open(COMPRESSED_PATH + filenames[i] + '.s.bin', 'wb') as fout:
+        byte_stream = pn_kit.binary_array_to_byte_array(octree_code)
+        with open(args.compressed_path + filenames[i] + '.s.bin', 'wb') as fout:
             fout.write(byte_stream)
-        # READ AND CHECK
-        '''
-        with open(COMPRESSED_PATH + filenames[i] + '.s.bin', 'rb') as fin:
-            byte_stream = fin.read()
-        assert np.all(byte_array_to_binary_array(byte_stream) == octree_code)
-        '''
         
         # * SAVE CENTER AND SCALE TO FILE
         arr = np.zeros((4))
         arr[:3] = center.detach().cpu().numpy().flatten()
         arr[3] = longest.detach().cpu().numpy()
-        arr.astype(np.float32).tofile(COMPRESSED_PATH + filenames[i] + '.c.bin')
+        arr.astype(np.float32).tofile(args.compressed_path + filenames[i] + '.c.bin')
 
-t = time.time() - start_time
-n = t / len(filenames)
-print(f"Done! Execution time: {round(t, 3)}s, i.e., {round(n, 5)}s per point cloud.")
+        t = time.time() - start_time
+        time_saver.append(t)
+
+mean_time = np.array(time_saver).mean()
+print(f"Done! Execution time: {round(mean_time, 5)}s per point cloud.")

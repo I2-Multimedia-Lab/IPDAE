@@ -61,7 +61,7 @@ class get_loss(nn.Module):
     def __init__(self):
         super(get_loss, self).__init__()
 
-    def forward(self, pc_pred, pc_target, fbpp, beta, λ):
+    def forward(self, pc_pred, pc_target, fbpp, λ):
         '''
         Input:
             pred: reconstructed point cloud (B, N, 3)

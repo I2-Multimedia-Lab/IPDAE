@@ -1,23 +1,26 @@
-import numpy as np
 import os
+import multiprocessing
+import numpy as np
 import pandas as pd
+
 import torch.nn as nn
 import torch
 import torch.nn.functional as F
-import octree_np
+
 from pytorch3d.ops.knn import _KNN, knn_gather, knn_points
 from tqdm import tqdm
-
 from pyntcloud import PyntCloud
 from plyfile import PlyData
 
-def read_point_clouds(file_path_list):
-    print('loading point clouds...')
-    pcs = []
-    for filepath in tqdm(file_path_list):
-        pcs.append(read_point_cloud(filepath))
-    return np.array(pcs)
-        
+import octree_np
+
+OCTREE_BPP_DICT = {
+    1024:0.07,
+    512:0.125,
+    256:0.25,
+    128:0.5,
+    64:1.0,
+}
 
 def read_point_cloud(filepath):
     plydata = PlyData.read(filepath)
@@ -25,7 +28,13 @@ def read_point_cloud(filepath):
         pc = np.array(np.transpose(np.stack((plydata['vertex']['x'],plydata['vertex']['y'],plydata['vertex']['z'])))).astype(np.float32)        
     except:
         pc = np.array(np.transpose(np.stack((plydata['vertex']['X'],plydata['vertex']['Y'],plydata['vertex']['Z'])))).astype(np.float32)        
-    return plydata
+    return pc
+
+def read_point_clouds(file_path_list):
+    print('loading point clouds...')
+    with multiprocessing.Pool() as p:
+        pcs = np.array(list(tqdm(p.imap(read_point_cloud, file_path_list, 32), total=len(file_path_list))))
+    return np.array(pcs)
 
 def save_point_cloud(pc, filename, path='./viewing/'):
     points = pd.DataFrame(pc, columns=['x', 'y', 'z'])
@@ -55,6 +64,7 @@ def denormalize(pc, cetner, longest, margin=0.01):
     pc = pc * longest / (1-margin)
     pc = pc + cetner
     return pc
+
 def n_scale_batch(batch_pc, margin=0.01):
 
     device = batch_pc.device
@@ -83,6 +93,7 @@ def d_n_scale_batch(batch_pc, scaling):
     batch_pc = batch_pc / scaling.view(B, 1, 1)
     #batch_pc = batch_pc + center.view(B, 1, 3)
     return batch_pc
+
 # POINTNET
 class PointNet(nn.Module):
     def __init__(self, in_channel, mlps, relu, bn):
@@ -446,3 +457,16 @@ def pmf_to_cdf(pmf):
     cdf_with_0 = cdf_with_0.clamp(max=1.)
     return cdf_with_0
 
+def binary_array_to_byte_array(a):
+    byte_stream = bytearray()
+    for i in range(0, len(a), 8):
+        byte_stream.append(int(''.join([str(e) for e in a[i:i+8]]), 2))
+    return byte_stream
+
+def byte_array_to_binary_array(byte_stream):
+    int_values = [x for x in byte_stream]
+    binary_array = []
+    for i in range(0, len(int_values)):
+        binary_array.append(list(f'{int_values[i]:08b}'))
+    binary_array = np.array(binary_array, dtype=np.int).flatten()
+    return binary_array

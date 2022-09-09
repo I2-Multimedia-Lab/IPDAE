@@ -1,85 +1,80 @@
 import os
-from glob import glob
 import time
+import argparse
 
 import numpy as np
 import torch
-from tqdm import tqdm
-from pytorch3d.ops.knn import _KNN, knn_gather, knn_points
 import torchac
 
-import pc_io
+from tqdm import tqdm
+from glob import glob
+
 import pn_kit
-import global_cd_net_mlpd as net
+import AE
 
-torch.manual_seed(1)
-np.random.seed(1)
+torch.cuda.manual_seed(11)
+torch.manual_seed(11)
+np.random.seed(11)
 
-N0 = 1024
-ALPHA = 2
-DEVICE = 'cpu' # 'cpu' or 'cuda'
+parser = argparse.ArgumentParser(
+    prog='decompress.py',
+    description='Deompress Point Clouds Using Trained Model.',
+    formatter_class=argparse.ArgumentDefaultsHelpFormatter
+)
 
-'''
-DECOMPRESSED_PATH = f'./data/ShapeNet_Decompressed_N_ALPHA{ALPHA}_K{64}_d{16}_L{7}_Lambda{1e-6}/'
-COMPRESSED_PATH = f'./data/ShapeNet_Compressed_N_ALPHA{ALPHA}_K{64}_d{16}_L{7}_Lambda{1e-6}/'
-'''
-'''
-COMPRESSED_PATH = f'./data/MSFT_Compressed_N_ALPHA{ALPHA}_K{128}_d{16}_L{7}_Lambda{1e-6}/'
-DECOMPRESSED_PATH = f'./data/MSFT_Decompressed_N_ALPHA{ALPHA}_K{128}_d{16}_L{7}_Lambda{1e-6}/'
-'''
-'''
-COMPRESSED_PATH = f'./data/Stanford3d_Area_1_Compressed_N_ALPHA{ALPHA}_K{128}_d{16}_L{7}_Lambda{1e-6}/'
-DECOMPRESSED_PATH = f'./data/Stanford3d_Area_1_Decompressed_N_ALPHA{ALPHA}_K{128}_d{16}_L{7}_Lambda{1e-6}/'
-'''
-'''
-COMPRESSED_PATH = f'./data/KITTI_seq_00_Compressed_N_ALPHA{ALPHA}_K{512}_d{16}_L{7}_Lambda{1e-6}/'
-DECOMPRESSED_PATH = f'./data/KITTI_seq_00_Decompressed_N_ALPHA{ALPHA}_K{512}_d{16}_L{7}_Lambda{1e-6}/'
-'''
+parser.add_argument('compressed_path', help='Comressed .bin files folder.', default='./data/ModelNet40_K256_compressed/')
+parser.add_argument('decompressed_path', help='Decompressed .ply files folder.', default='./data/ModelNet40_K256_decompressed/')
+parser.add_argument('model_load_folder', help='Directory where to load trained models.', default='./model/K256/')
 
-COMPRESSED_PATH = f'./data/andrew9_Compressed_N_ALPHA{ALPHA}_K{1024}_d{16}_L{7}_Lambda{1e-6}/'
-DECOMPRESSED_PATH = f'./data/andrew9_Decompressed_N_ALPHA{ALPHA}_K{1024}_d{16}_L{7}_Lambda{1e-6}/'
+parser.add_argument('--N0', type=int, help='Scale Transformation constant.', default=1024)
+parser.add_argument('--ALPHA', type=int, help='The factor of patch coverage ratio.', default=2)
+parser.add_argument('--K', type=int, help='Number of points in each patch.', default=256)
+parser.add_argument('--d', type=int, help='Bottleneck size.', default=16)
+parser.add_argument('--L', type=int, help='Quantization Level.', default=7)
 
-NET_PATH, PROB_PATH = f'./model/ModelNet_N{8192}_ALPHA{2}_K{1024}_d{16}_L{7}_Lambda{1e-6}_MIN_SAMPLED_BPP{0.07}_N0_normalized_CD/ae_s78500.pkl', f'./model/ModelNet_N{8192}_ALPHA{2}_K{1024}_d{16}_L{7}_Lambda{1e-6}_MIN_SAMPLED_BPP{0.07}_N0_normalized_CD/prob_s78500.pkl'
+parser.add_argument('--device', help='AE Model Device (cpu or cuda)', default='cpu')
 
-B = 1 # Compress 1 Point Cloud Each Time !unchangable
+args = parser.parse_args()
 
-# CREATE DECOMPRESSED_PATH PATH
-if not os.path.exists(DECOMPRESSED_PATH):
-    os.makedirs(DECOMPRESSED_PATH)
+N0 = args.N0
+K = args.K
+k = K // args.ALPHA
 
-def byte_array_to_binary_array(byte_stream):
-    int_values = [x for x in byte_stream]
-    binary_array = []
-    for i in range(0, len(int_values)):
-        binary_array.append(list(f'{int_values[i]:08b}'))
-    binary_array = np.array(binary_array, dtype=np.int32).flatten()
-    return binary_array
+B = 1 # Compress 1 Point Cloud Each Time !unchangable in this implementation
 
-def denormalize(pc, cetner, longest, margin=0.01):
-    pc = pc - 0.5
-    pc = pc * longest / (1-margin)
-    pc = pc + cetner
-    return pc
+# CREATE COMPRESSED FOLDER
+if not os.path.exists(args.decompressed_path):
+    os.makedirs(args.decompressed_path)
 
 # GET FILENAME FROM COMPRESSED PATH
-files = glob(COMPRESSED_PATH + '*.s.bin')
-filenames = [x[len(COMPRESSED_PATH):-6] for x in files]
+files = glob(args.compressed_path + '*.s.bin')
+filenames = [x[len(args.compressed_path):-6] for x in files]
 
-ae = torch.load(NET_PATH).to(DEVICE).eval()
+NET_PATH = os.path.join(args.model_load_folder, 'ae.pkl')
+PROB_PATH = os.path.join(args.model_load_folder, 'prob.pkl')
+
+ae = AE.AE(K=K, k=k, d=args.d, L=args.L).to(args.device)
+ae.load_state_dict(torch.load(NET_PATH))
+ae.eval()
+
 # PROB MUST RUNNING ON THE GPU (don't know why...)
-prob = torch.load(PROB_PATH).cuda().eval()
+prob = AE.ConditionalProbabilityModel(args.L, args.d).cuda()
+prob.load_state_dict(torch.load(PROB_PATH))
+prob.eval()
 
-# CONVERT .bin FILES
-start_time = time.time()
+time_saver = []
+
 for i in tqdm(range(len(filenames))):
-    octree_code_path = COMPRESSED_PATH + filenames[i] + '.s.bin'
-    latent_code_path = COMPRESSED_PATH + filenames[i] + '.p.bin'
-    center_scale_path = COMPRESSED_PATH + filenames[i] + '.c.bin'
+    octree_code_path = args.compressed_path + filenames[i] + '.s.bin'
+    latent_code_path = args.compressed_path + filenames[i] + '.p.bin'
+    center_scale_path = args.compressed_path + filenames[i] + '.c.bin'
+    
+    start_time = time.time()
 
     # DECODE THE OCTREED POINTS
-    with open(COMPRESSED_PATH + filenames[i] + '.s.bin', 'rb') as fin:
+    with open(octree_code_path, 'rb') as fin:
         byte_stream = fin.read()
-    octree_code = byte_array_to_binary_array(byte_stream)
+    octree_code = pn_kit.byte_array_to_binary_array(byte_stream)
     rec_sampled_xyz = pn_kit.decode_sampled_np([octree_code], scale=1)
     rec_sampled_xyz = torch.Tensor(rec_sampled_xyz)
     S = rec_sampled_xyz.shape[1]
@@ -93,7 +88,7 @@ for i in tqdm(range(len(filenames))):
     latent = (torchac.decode_float_cdf(cdf, byte_stream) - ae.L // 2).float().view(B*S, -1)
 
     # DECODE THE LATENT TO PATCHES
-    latent = latent.to(DEVICE)
+    latent = latent.to(args.device)
     linear_output = ae.inv_pool(latent)
     linear_output = linear_output.view(B*S, -1, ae.k)
     latent_quantized = latent.unsqueeze(-1).tile((1, 1, ae.k))
@@ -113,10 +108,12 @@ for i in tqdm(range(len(filenames))):
     arr = np.fromfile(center_scale_path, dtype=np.float32)
     center = torch.Tensor(arr[:3]).reshape(1, 3)
     longest = torch.Tensor([arr[3]])
-    pc = denormalize(pc, center, longest, margin=0.01)
+    pc = pn_kit.denormalize(pc, center, longest, margin=0.01)
 
-    pc_io.save_point_cloud(pc[0].detach().cpu().numpy(), filenames[i] + '.bin.ply', path=DECOMPRESSED_PATH)
+    t = time.time() - start_time
+    time_saver.append(t)
 
-t = time.time() - start_time
-n = t / len(filenames)
-print(f"Done! Execution time: {round(t, 3)}s, i.e., {round(n, 5)}s per point cloud.")
+    pn_kit.save_point_cloud(pc[0].detach().cpu().numpy(), filenames[i] + '.bin.ply', path=args.decompressed_path)
+
+mean_time = np.array(time_saver).mean()
+print(f"Done! Execution time: {round(mean_time, 5)}s per point cloud.")
