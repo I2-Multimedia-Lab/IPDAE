@@ -131,20 +131,20 @@ with torch.no_grad():
         byte_stream = torchac.encode_float_cdf(cdf, n_latent_quantized, check_input_bounds=True)
 
         # * WRITE AE TO FILE
-        with open(args.compressed_path + filenames[i] + '.p.bin', 'wb') as fout:
+        with open(os.path.join(args.compressed_path, filenames[i] + '.p.bin'), 'wb') as fout:
             fout.write(byte_stream)
 
         # * SAVE OCTREE CODE TO FILE
         octree_code = octree_codes[0]
         byte_stream = pn_kit.binary_array_to_byte_array(octree_code)
-        with open(args.compressed_path + filenames[i] + '.s.bin', 'wb') as fout:
+        with open(os.path.join(args.compressed_path, filenames[i] + '.s.bin'), 'wb') as fout:
             fout.write(byte_stream)
         
         # * SAVE CENTER AND SCALE TO FILE
         arr = np.zeros((4))
         arr[:3] = center.detach().cpu().numpy().flatten()
         arr[3] = longest.detach().cpu().numpy()
-        arr.astype(np.float32).tofile(args.compressed_path + filenames[i] + '.c.bin')
+        arr.astype(np.float32).tofile(os.path.join(args.compressed_path, filenames[i] + '.c.bin'))
 
         t = time.time() - start_time
         time_saver.append(t)

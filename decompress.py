@@ -47,8 +47,8 @@ if not os.path.exists(args.decompressed_path):
     os.makedirs(args.decompressed_path)
 
 # GET FILENAME FROM COMPRESSED PATH
-files = glob(args.compressed_path + '*.s.bin')
-filenames = [x[len(args.compressed_path):-6] for x in files]
+files = glob(os.path.join(args.compressed_path, '*.s.bin'))
+filenames = np.array([os.path.split(x)[1][:-6] for x in files])
 
 NET_PATH = os.path.join(args.model_load_folder, 'ae.pkl')
 PROB_PATH = os.path.join(args.model_load_folder, 'prob.pkl')
@@ -65,9 +65,9 @@ prob.eval()
 time_saver = []
 
 for i in tqdm(range(len(filenames))):
-    octree_code_path = args.compressed_path + filenames[i] + '.s.bin'
-    latent_code_path = args.compressed_path + filenames[i] + '.p.bin'
-    center_scale_path = args.compressed_path + filenames[i] + '.c.bin'
+    octree_code_path = os.path.join(args.compressed_path, filenames[i] + '.s.bin')
+    latent_code_path = os.path.join(args.compressed_path, filenames[i] + '.p.bin')
+    center_scale_path = os.path.join(args.compressed_path, filenames[i] + '.c.bin')
     
     start_time = time.time()
 
