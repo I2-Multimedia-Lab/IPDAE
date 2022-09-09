@@ -62,7 +62,7 @@ The following steps will show you a general way to prepare point clouds in our e
    ```
 ## Training
 
-We provided our trained models at: [Link]()
+We provided our trained models at: [Link]() (coming soon)
 
 Otherwise you can use `train.py` to train our model on ModelNet40 training set:
 
