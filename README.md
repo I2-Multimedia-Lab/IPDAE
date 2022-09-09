@@ -14,7 +14,7 @@ Python 3.9.6 and Pytorch 1.9.0
 
 pytorch3d 0.5.0 for KNN and chamfer loss:	https://github.com/facebookresearch/pytorch3d
 
-geo_dist for point to plane evaluation:	https://github.com/mauriceqch/geo_dist
+geo_dist for PSNR calculation:	https://github.com/mauriceqch/geo_dist
 
 ## Data Preparation
 
