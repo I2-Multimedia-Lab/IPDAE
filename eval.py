@@ -86,10 +86,10 @@ ipt_files, p2pointPSNRs, p2planePSNRs, chamfer_ds, n_points_inputs, n_points_out
 print('Evaluating...')
 for i in tqdm(range(len(filenames))):
     input_f = files[i]
-    comp_s_f = args.compressed_path + filenames[i] + '.s.bin'
-    comp_p_f = args.compressed_path + filenames[i] + '.p.bin'
-    comp_c_f = args.compressed_path + filenames[i] + '.c.bin'
-    decomp_f = args.decompressed_path + filenames[i] + '.bin.ply'
+    comp_s_f = os.path.join(args.compressed_path, filenames[i] + '.s.bin')
+    comp_p_f = os.path.join(args.compressed_path, filenames[i] + '.p.bin')
+    comp_c_f = os.path.join(args.compressed_path, filenames[i] + '.c.bin')
+    decomp_f = os.path.join(args.decompressed_path, filenames[i] + '.bin.ply')
 
     if not os.path.exists(decomp_f):
         continue
