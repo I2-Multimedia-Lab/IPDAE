@@ -32,7 +32,6 @@ parser.add_argument('--ALPHA', type=int, help='The factor of patch coverage rati
 parser.add_argument('--K', type=int, help='Number of points in each patch.', default=256)
 parser.add_argument('--d', type=int, help='Bottleneck size.', default=16)
 parser.add_argument('--L', type=int, help='Quantization Level.', default=7)
-parser.add_argument('--octree_bpp', type=int, help='Centroids bpp limit.', default=0.25)
 
 args = parser.parse_args()
 
