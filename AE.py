@@ -8,8 +8,6 @@ from pytorch3d.loss import chamfer_distance
 from torch.nn.modules.container import T
 from pn_kit import PointNet, SetAbstraction, MLP
 
-from geomloss import SamplesLoss
-
 
 class AE(nn.Module):
     def __init__(self, K, k, d, L):
